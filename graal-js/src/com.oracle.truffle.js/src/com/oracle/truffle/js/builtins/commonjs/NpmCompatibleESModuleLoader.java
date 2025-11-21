@@ -605,6 +605,12 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
         public Map<String, String> getExport(String specifier) {
             assert hasNonNullProperty(jsonObj, EXPORTS_PROPERTY_NAME);
             var data = JSObject.get(jsonObj, EXPORTS_PROPERTY_NAME);
+            if (data instanceof TruffleString exportStr) {
+                if (!exportStr.toString().startsWith(".") || exportStr.toString().contains("..")) {
+                    throw failMessage(INVALID_PACKAGE_EXPORT + exportStr);
+                }
+                return Map.of(EXPORT_TYPE_DEFAULT, exportStr.toString());
+            }
             if (data instanceof JSDynamicObject exportsObj) {
                 for (TruffleString key : JSObject.enumerableOwnNames(exportsObj)) {
                     // find a match for the requested export...
