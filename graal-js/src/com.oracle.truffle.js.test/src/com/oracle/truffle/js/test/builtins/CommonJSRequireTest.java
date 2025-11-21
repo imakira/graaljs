@@ -804,4 +804,109 @@ public class CommonJSRequireTest {
             assertEquals(expectedMessage, t.getMessage());
         }
     }
+
+    @Test
+    public void importModuleFromExportsFieldSimple() throws IOException {
+        final String src = "import {name} from 'exports-in-package-json-simple'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "index\n", options);
+    }
+
+    @Test
+    public void importModuleFromExportsFieldSimpleThrow() {
+        final String src = "import {name} from 'exports-in-package-json-simple/index.js'; console.log('should throw')";
+        final String expectedMessage = "TypeError: Package subpath is not defined by \"exports\" field: 'exports-in-package-json-simple/index.js'";
+        Map<String, String> options = getDefaultOptions();
+        try {
+            runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "index\n", options);
+            assert false;
+        } catch (Throwable t) {
+            if (!t.getClass().isAssignableFrom(PolyglotException.class)) {
+                throw new AssertionError("Unexpected exception " + t);
+            }
+            assertEquals(expectedMessage, t.getMessage());
+        }
+    }
+
+    @Test
+    public void importModuleFromExportsField() throws IOException {
+        final String src = "import {name} from 'exports-in-package-json'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "index\n", options);
+    }
+
+    @Test
+    public void importModuleFromExportsFieldPriority() throws IOException {
+        final String src = "import {name} from 'exports-in-package-json/feature.js'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "graaljs\n", options);
+    }
+
+    @Test
+    public void importModuleFromExportsPriorityThrow() {
+        final String src = "import {name} from 'exports-in-package-json/feature-noncompatible.js'; console.log('should throw')";
+        final String expectedMessage = "TypeError: Package subpath is not defined by \"exports\" field: 'exports-in-package-json/feature-noncompatible.js'";
+        Map<String, String> options = getDefaultOptions();
+        try {
+            runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "", options);
+            assert false;
+        } catch (Throwable t) {
+            if (!t.getClass().isAssignableFrom(PolyglotException.class)) {
+                throw new AssertionError("Unexpected exception " + t);
+            }
+            assertEquals(expectedMessage, t.getMessage());
+        }
+    }
+
+    @Test
+    public void importModuleFromExportsNotExported() {
+        final String src = "import {name} from 'exports-in-package-json/not-exported.js'; console.log('should throw')";
+        final String expectedMessage = "TypeError: Package subpath is not defined by \"exports\" field: 'exports-in-package-json/not-exported.js'";
+        Map<String, String> options = getDefaultOptions();
+        try {
+            runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "", options);
+            assert false;
+        } catch (Throwable t) {
+            if (!t.getClass().isAssignableFrom(PolyglotException.class)) {
+                throw new AssertionError("Unexpected exception " + t);
+            }
+            assertEquals(expectedMessage, t.getMessage());
+        }
+    }
+
+    private Source subpathPatternTestBuildSrc(String name){
+          try {
+              String src = "import {name} from 'exports-subpath-pattern" + (name == "" ? "" : "/" + name) + "'; console.log(name)";
+              return Source.newBuilder(ID, src, "test.mjs").build();
+          } catch (IOException e) {
+              throw new AssertionError("Unexpected exception " + e);
+          }
+    }
+
+    @Test
+    public void importModuleSubpathPattern() throws IOException {
+        var options = getDefaultOptions();
+        runAndExpectOutput(this.subpathPatternTestBuildSrc("src/main.js"), "dest-main\n", options);
+    }
+
+    @Test
+    public void importModuleSubpathPatternWithConditional() throws IOException {
+        var options = getDefaultOptions();
+        runAndExpectOutput(this.subpathPatternTestBuildSrc("src-feature/feature.js"), "dest-feature-graaljs\n", options);
+    }
+
+    @Test
+    public void importModuleSubpathPatternThrow() {
+        var options = getDefaultOptions();
+        final String expectedMessage = "TypeError: Module not found: 'exports-subpath-pattern/src-feature/nonexistence.js'";
+        try {
+            runAndExpectOutput(this.subpathPatternTestBuildSrc("src-feature/nonexistence.js"), "", options);
+            assert false;
+        } catch (Throwable t){
+            if (!t.getClass().isAssignableFrom(PolyglotException.class)) {
+                throw new AssertionError("Unexpected exception " + t);
+            }
+            assertEquals(expectedMessage, t.getMessage());
+        }
+    }
 }
