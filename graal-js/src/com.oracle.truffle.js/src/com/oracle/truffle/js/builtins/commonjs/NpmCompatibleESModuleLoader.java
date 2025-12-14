@@ -161,18 +161,31 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             TruffleLanguage.Env env = realm.getEnv();
             URI parentURL = getFullPath(referencingModule).toUri();
             URI resolution = esmResolve(specifier, parentURL, env);
-            if (resolution == TryCommonJS) {
+            Format format;
+
+            if(isFileURI(resolution)){
+                format = esmFileFormat(resolution, env);
+            } else{
+                format = getAssociatedDefaultFormat(resolution);
+            }
+
+            if (resolution == TryCustomESM) {
+              // Failed ESM resolution. Give the virtual FS a chance to map to a file.
+              // A custom Truffle FS might still try to map a package specifier to some file.
+              TruffleFile maybeFile = env.getPublicTruffleFile(specifier);
+              if (maybeFile.exists() && !maybeFile.isDirectory()) {
+                  return loadModuleFromFile(referencingModule, moduleRequest, maybeFile, maybeFile.getPath());
+              }
+            } else if(isFileURI(resolution) && format == Format.CommonJS) {
+                // If esmResolve returns a valid file url and the format is CommonJS,
+                //   we will use this path to load the CJS module.
+                // Since in node.js, CommonJS modules could also be exported in the `exports` field.
+                return tryLoadingAsCommonjsModule(resolution.getRawPath());
+            }else if (resolution == TryCommonJS || format == Format.CommonJS) {
                 // Compatibility mode: try loading as a CommonJS module.
                 return tryLoadingAsCommonjsModule(specifier);
             } else {
-                if (resolution == TryCustomESM) {
-                    // Failed ESM resolution. Give the virtual FS a chance to map to a file.
-                    // A custom Truffle FS might still try to map a package specifier to some file.
-                    TruffleFile maybeFile = env.getPublicTruffleFile(specifier);
-                    if (maybeFile.exists() && !maybeFile.isDirectory()) {
-                        return loadModuleFromFile(referencingModule, moduleRequest, maybeFile, maybeFile.getPath());
-                    }
-                } else if (resolution != null) {
+                if (resolution != null) {
                     TruffleFile file = env.getPublicTruffleFile(resolution);
                     return loadModuleFromFile(referencingModule, moduleRequest, file, file.getPath());
                 }
@@ -300,8 +313,6 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             // Try customFS lookup
             return resolved;
         }
-        // 6. Let format be undefined.
-        Format format;
         // 7. If resolved is a "file:" URL, then
         if (isFileURI(resolved)) {
             // 7.1 If resolvedURL contains any percent encodings of "/" or "\" ("%2f" and "%5C"
@@ -323,21 +334,8 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             // 7.4 Set resolved to the real path of resolved, maintaining the same URL querystring
             // and fragment components.
             resolved = resolved.normalize();
-            // 7.5 Set format to the result of ESM_FILE_FORMAT(resolved).
-            format = esmFileFormat(resolved, env);
-        } else {
-            // 8. Otherwise
-            // 8.1 Set format the module format of the content type associated with the URL
-            // resolved.
-            format = getAssociatedDefaultFormat(resolved);
         }
-        if (format == Format.CommonJS) {
-            // Will load as CommonJS.
-            return TryCommonJS;
-        } else {
-            // Will load as ESM.
-            return resolved;
-        }
+        return resolved;
     }
 
     /**

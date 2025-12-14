@@ -923,4 +923,11 @@ public class CommonJSRequireTest {
         Map<String, String> options = getDefaultOptions();
         runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "esm-default\n", options);
     }
+
+    @Test
+    public void importModuleExportsDefaultToCjs() throws IOException {
+        final String src = "import * as m from 'exports-nested/should-default-cjs'; console.log(m.name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "cjs-default\n", options);
+    }
 }
