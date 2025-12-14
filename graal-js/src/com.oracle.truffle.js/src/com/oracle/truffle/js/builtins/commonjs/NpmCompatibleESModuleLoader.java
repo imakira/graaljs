@@ -57,11 +57,11 @@ import static com.oracle.truffle.js.runtime.Strings.MODULE;
 import static com.oracle.truffle.js.runtime.Strings.NAME;
 import static com.oracle.truffle.js.runtime.Strings.PACKAGE_JSON_MAIN_PROPERTY_NAME;
 import static com.oracle.truffle.js.runtime.Strings.TYPE;
+import static com.oracle.truffle.js.runtime.Strings.constant;
 
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -383,7 +383,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
         throw fail(UNSUPPORTED_FILE_EXTENSION, url.toString());
     }
 
-    private static String exportForImport(Map<String, String> exports) {
+    private static String getExportByPreferredTypes(JSDynamicObject exports) {
         // in order of preference, find the best import to use for this circumstance; this will be `graaljs` if
         // specified (as top preference), then `import`, then `require`, then `default`. if the developer has registered
         // their own preferred export types, these will be preferred first.
@@ -391,15 +391,28 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
         // this branch only activates if package exports are present and need to be used to resolve an import. thus,
         // there is no fallback behavior waiting for us, and so an exception is thrown if no export can be matched.
 
-        // 1. for preferred export types...
-        for (String preferred : getRegisteredExportTypes()) {
-            // 1.1: is it specified within the exports?
-            if (exports.containsKey(preferred)) {
-                // 1.2: if so, resolve the import from the package root. make sure to slice off the `./` prefix.
-                return exports.get(preferred);
+        // 1.2: if so, resolve the import from the package root. make sure to slice off the `./` prefix.
+        for(String type : getRegisteredExportTypes()){
+            if(exports.hasOwnProperty(constant(type))){
+                var export = JSObject.get(exports, constant(type));
+                if(export!=null){
+                    if(Strings.isTString(export)){
+                        var exportStr = export.toString();
+                        if(!exportStr.startsWith("." ) || exportStr.contains("..")){
+                            // must start with `.`, must not contain `..`
+                          throw failMessage(INVALID_PACKAGE_EXPORT + type + "'");
+                        }
+                        return exportStr;
+                    } else if (export instanceof JSDynamicObject exportObj) {
+                        var result = getExportByPreferredTypes(exportObj);
+                        // we will continue doing the DFS search if this subtree gives no result
+                        if(result != null){
+                            return result;
+                        }
+                    }
+                }
             }
         }
-
         return null;
     }
 
@@ -652,25 +665,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                         Object value = JSObject.get(exportsObj, key);
                         String subpathPatternDest = null;
                         if (value instanceof JSDynamicObject valueObj) {
-                            var exportKeys = valueObj.ownPropertyKeys();
-                            var exportMap = new HashMap<String, String>();
-                            for (Object exportKey : exportKeys) {
-                                if (exportKey instanceof TruffleString exportKeyStr) {
-                                    Object exportValue = JSObject.get(valueObj, exportKeyStr);
-                                    if (Strings.isTString(exportValue)) {
-                                        var exportStr = exportKeyStr.toString();
-                                        var exportVal = exportValue.toString();
-                                        if (!exportVal.startsWith(".") || exportVal.contains("..")) {
-                                            // must start with `.`, must not contain `..`
-                                            throw failMessage(INVALID_PACKAGE_EXPORT + exportStr + "'");
-                                        }
-                                        exportMap.put(exportStr, exportVal);
-                                    }
-                                } else {
-                                    return null;
-                                }
-                            }
-                            subpathPatternDest = exportForImport(exportMap);
+                            subpathPatternDest = getExportByPreferredTypes(valueObj);
                             if (subpathPatternDest == null) {
                                 return null;
                             }

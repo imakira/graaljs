@@ -909,4 +909,18 @@ public class CommonJSRequireTest {
             assertEquals(expectedMessage, t.getMessage());
         }
     }
+
+    @Test
+    public void importModuleNestExprots() throws IOException{
+        final String src = "import {name} from 'exports-nested/feature.js'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "esm-graaljs\n", options);
+    }
+
+    @Test
+    public void importModuleNestExportsShouldDefault() throws IOException{
+        final String src = "import {name} from 'exports-nested/should-default.js'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "esm-default\n", options);
+    }
 }
