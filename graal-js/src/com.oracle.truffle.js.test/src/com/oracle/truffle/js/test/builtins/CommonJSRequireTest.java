@@ -815,7 +815,7 @@ public class CommonJSRequireTest {
     @Test
     public void importModuleFromExportsFieldSimpleThrow() {
         final String src = "import {name} from 'exports-in-package-json-simple/index.js'; console.log('should throw')";
-        final String expectedMessage = "TypeError: Package subpath is not defined by \"exports\" field: 'exports-in-package-json-simple/index.js'";
+        final String expectedMessage = "TypeError: Package subpath is not defined by \"exports\" field: './index.js'";
         Map<String, String> options = getDefaultOptions();
         try {
             runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "index\n", options);
@@ -845,7 +845,7 @@ public class CommonJSRequireTest {
     @Test
     public void importModuleFromExportsPriorityThrow() {
         final String src = "import {name} from 'exports-in-package-json/feature-noncompatible.js'; console.log('should throw')";
-        final String expectedMessage = "TypeError: Package subpath is not defined by \"exports\" field: 'exports-in-package-json/feature-noncompatible.js'";
+        final String expectedMessage = "TypeError: Package subpath is not defined by \"exports\" field: './feature-noncompatible.js'";
         Map<String, String> options = getDefaultOptions();
         try {
             runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "", options);
@@ -861,7 +861,7 @@ public class CommonJSRequireTest {
     @Test
     public void importModuleFromExportsNotExported() {
         final String src = "import {name} from 'exports-in-package-json/not-exported.js'; console.log('should throw')";
-        final String expectedMessage = "TypeError: Package subpath is not defined by \"exports\" field: 'exports-in-package-json/not-exported.js'";
+        final String expectedMessage = "TypeError: Package subpath is not defined by \"exports\" field: './not-exported.js'";
         Map<String, String> options = getDefaultOptions();
         try {
             runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "", options);
@@ -911,7 +911,7 @@ public class CommonJSRequireTest {
     }
 
     @Test
-    public void importModuleNestExprots() throws IOException{
+    public void importModuleNestExports() throws IOException{
         final String src = "import {name} from 'exports-nested/feature.js'; console.log(name)";
         Map<String, String> options = getDefaultOptions();
         runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "esm-graaljs\n", options);

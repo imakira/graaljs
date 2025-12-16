@@ -53,6 +53,8 @@ import static com.oracle.truffle.js.builtins.commonjs.CommonJSResolution.joinPat
 import static com.oracle.truffle.js.builtins.commonjs.CommonJSResolution.loadJsonObject;
 import static com.oracle.truffle.js.lang.JavaScriptLanguage.ID;
 import static com.oracle.truffle.js.runtime.Strings.EXPORTS_PROPERTY_NAME;
+import static com.oracle.truffle.js.runtime.Strings.IMPORTS_PROPERTY_NAME;
+import static com.oracle.truffle.js.runtime.Strings.IMPORT_SCRIPT_ENGINE_GLOBAL_BINDINGS;
 import static com.oracle.truffle.js.runtime.Strings.MODULE;
 import static com.oracle.truffle.js.runtime.Strings.NAME;
 import static com.oracle.truffle.js.runtime.Strings.PACKAGE_JSON_MAIN_PROPERTY_NAME;
@@ -62,10 +64,11 @@ import static com.oracle.truffle.js.runtime.Strings.constant;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 import com.oracle.js.parser.ir.Module.ModuleRequest;
@@ -80,6 +83,7 @@ import com.oracle.truffle.js.runtime.JSErrorType;
 import com.oracle.truffle.js.runtime.JSException;
 import com.oracle.truffle.js.runtime.JSRealm;
 import com.oracle.truffle.js.runtime.Strings;
+import com.oracle.truffle.js.runtime.array.ScriptArray;
 import com.oracle.truffle.js.runtime.builtins.JSFunction;
 import com.oracle.truffle.js.runtime.builtins.JSFunctionObject;
 import com.oracle.truffle.js.runtime.objects.AbstractModuleRecord;
@@ -102,16 +106,16 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
     private static final String FAILED_BUILTIN = "Failed to load built-in ES module: '";
     private static final String INVALID_MODULE_SPECIFIER = "Invalid module specifier: '";
     private static final String UNSUPPORTED_FILE_EXTENSION = "Unsupported file extension: '";
-    private static final String UNSUPPORTED_PACKAGE_EXPORTS = "Unsupported package exports: '";
-    private static final String INVALID_PACKAGE_EXPORT = "Invalid package export: '";
+    private static final String INVALID_PACKAGE_TARGET = "Invalid package export: '";
     private static final String PACKAGE_PATH_NOT_EXPORTED = "Package subpath is not defined by \"exports\" field: '";
-    private static final String UNSUPPORTED_PACKAGE_IMPORTS = "Unsupported package imports: '";
+    private static final String PACKAGE_IMPORT_NOT_DEFINED = "Packages imports do not define the specifier: '";
     private static final String UNSUPPORTED_DIRECTORY_IMPORT = "Unsupported directory import: '";
     private static final String INVALID_PACKAGE_CONFIGURATION = "Invalid package configuration: '";
     private static final String EXPORT_TYPE_GRAALJS = "graaljs";
     private static final String EXPORT_TYPE_IMPORT = "import";
     private static final String EXPORT_TYPE_REQUIRE = "require";
     private static final String EXPORT_TYPE_DEFAULT = "default";
+    private static final char PACKAGE_EXPORT_WILDCARD = '*';
     private static final LinkedList<String> EXPORT_TYPES;
 
     static {
@@ -299,7 +303,8 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                 resolved = resolveRelativeToParent(specifier, parentURL);
             } else if (!specifier.isEmpty() && specifier.charAt(0) == '#') {
                 // 4. Otherwise, if specifier starts with "#", then
-                throw fail(UNSUPPORTED_PACKAGE_IMPORTS, specifier);
+                // 4.1 Set resolved to the result of PACKAGE_IMPORTS_RESOLVE(specifier, parentURL, defaultConditions).
+                resolved = packageImportsResolve(specifier, parentURL, getRegisteredExportTypes(), env);
             } else {
                 // 5.1 Note: specifier is now a bare specifier.
                 // 5.2 Set resolvedURL the result of PACKAGE_RESOLVE(specifier, parentURL).
@@ -336,6 +341,32 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             resolved = resolved.normalize();
         }
         return resolved;
+    }
+    /*
+     * PACKAGE_IMPORTS_RESOLVE(specifier, parentURL, conditions)
+     */
+
+    private URI packageImportsResolve(String specifier, URI parentURL, List<String> conditions, TruffleLanguage.Env env) {
+        // 1 Assert: specifier begins with "#".
+        // 2 If specifier is exactly equal to "#" or starts with "#/", then
+        if(!specifier.startsWith("#") || specifier.equals("#") || specifier.equals("#/")){
+            // 2.1 Throw an Invalid Module Specifier error.
+            throw fail(INVALID_MODULE_SPECIFIER, specifier);
+        }
+        var packageURL = lookupPackageScope(parentURL, env);
+        if(packageURL!=null){
+            PackageJson pjson = readPackageJson(packageURL, env);
+            if(pjson.hasImportsProperty()){
+                JSDynamicObject imports = pjson.getImportsProperty();
+                if(imports!=null){
+                    URI resolved = packageImportsExportsResolve(specifier, imports, packageURL, true, conditions, env);
+                    if(resolved!=null){
+                        return resolved;
+                    }
+                }
+            }
+        }
+        throw fail(PACKAGE_IMPORT_NOT_DEFINED, specifier);
     }
 
     /**
@@ -398,7 +429,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                         var exportStr = export.toString();
                         if(!exportStr.startsWith("." ) || exportStr.contains("..")){
                             // must start with `.`, must not contain `..`
-                          throw failMessage(INVALID_PACKAGE_EXPORT + type + "'");
+                          throw failMessage(INVALID_PACKAGE_TARGET + type + "'");
                         }
                         return exportStr;
                     } else if (export instanceof JSDynamicObject exportObj) {
@@ -415,6 +446,233 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
     }
 
     /**
+     * PACKAGE_EXPORTS_RESOLVE(packageURL, subpath, exports, conditions)
+     */
+    private URI packageExportsResolve(URI packageURL, String subpath, Object exports, List<String> conditions, TruffleLanguage.Env env){
+        URI resolved = null;
+        if(exports instanceof JSDynamicObject exportsObj){
+            boolean hasStartingWithDot = false;
+            List<TruffleString> keys = JSObject.enumerableOwnNames(exportsObj);
+            for(int i = 0; i < keys.size(); i++){
+                var keyTStr = keys.get(i);
+                var keyStr = keyTStr.toString();
+                boolean startingWithDot = keyStr.startsWith(".");
+                // If exports is an Object with both a key starting with "." and a key not starting with ".", throw an Invalid Package Configuration error.
+                if(i != 0 && hasStartingWithDot != startingWithDot){
+                    throw fail(INVALID_PACKAGE_CONFIGURATION, packageURL.toString());
+                }
+                hasStartingWithDot = startingWithDot;
+            }
+        }
+        if(subpath.equals(".")){
+            // If subpath is equal to ".", then
+            Object mainExport = null;
+            // If exports is a String or Array,
+            // or an Object containing no keys starting with ".", then
+            if(exports instanceof TruffleString || JSObject.hasArray(exports)){
+                mainExport = exports;
+            } else if(exports instanceof JSDynamicObject exportsObj){
+                if (exportsObj.hasOwnProperty(constant(DOT))){
+                    mainExport = JSObject.get(exportsObj, constant(DOT));
+                }
+            }
+            if(mainExport != null){
+                resolved = packageTargetResolve(packageURL, mainExport, null, false, conditions, env);
+                if(resolved!=null){
+                    return resolved;
+                }
+            }
+        } else {
+            // Otherwise, if exports is an Object and all keys of exports start with ".", then
+            if(exports instanceof JSDynamicObject exportsObj){
+                for(var keyTStr : JSObject.enumerableOwnNames(exportsObj)){
+                    if(!keyTStr.toString().startsWith(".")){
+                        throw fail(PACKAGE_PATH_NOT_EXPORTED, subpath);
+                    }
+                }
+                // Assert: subpath begins with "./".
+                if(!subpath.startsWith("./")){
+                    throw fail(INVALID_MODULE_SPECIFIER, subpath);
+                }
+                resolved = packageImportsExportsResolve(subpath, exportsObj, packageURL, false, conditions, env);
+                if(resolved!=null){
+                    return resolved;
+                }
+            }
+        }
+        throw fail(PACKAGE_PATH_NOT_EXPORTED, subpath);
+    }
+
+    private static int countChar(String s, char c){
+        return s.length() - s.replace(String.valueOf(c), "").length();
+    }
+
+    private static int patternKeyCompare(String keyA, String keyB, URI packageURL){
+        if(countChar(keyA, PACKAGE_EXPORT_WILDCARD)!=1 || countChar(keyB, PACKAGE_EXPORT_WILDCARD)!=1){
+            throw fail(INVALID_PACKAGE_TARGET, packageURL.toString());
+        }
+        var baseLengthA = keyA.indexOf(PACKAGE_EXPORT_WILDCARD);
+        var baseLengthB = keyB.indexOf(PACKAGE_EXPORT_WILDCARD);
+        if(baseLengthA > baseLengthB){
+            return -1;
+        }
+        if(baseLengthB > baseLengthA) {
+            return 1;
+        }
+        if(keyA.length() > keyB.length()){
+            return -1;
+        }
+        if(keyB.length() > keyA.length()){
+            return 1;
+        }
+        return 0;
+    }
+
+    /**
+     * PACKAGE_IMPORTS_EXPORTS_RESOLVE(matchKey, matchObj, packageURL, isImports, conditions)
+     */
+    private URI packageImportsExportsResolve(String matchKey, JSDynamicObject matchObj, URI packageURL, boolean isImports, List<String> conditions, TruffleLanguage.Env env) {
+        if(matchKey.endsWith("/")){
+            throw fail(INVALID_MODULE_SPECIFIER, matchKey);
+        }
+        if(!matchKey.contains("*") && matchObj.hasOwnProperty(constant(matchKey))){
+            var target = JSObject.get(matchObj, constant(matchKey));
+            return packageTargetResolve(packageURL, target, null, isImports, conditions, env);
+        }
+        var resolved = JSObject.enumerableOwnNames(matchObj)
+                .stream()
+                // .filter(key -> key instanceof TruffleString)
+                .map(key -> key.toString())
+                .filter(key -> countChar(key, PACKAGE_EXPORT_WILDCARD) == 1)
+                .sorted((keyA, keyB) -> patternKeyCompare(keyA, keyB, packageURL))
+                .map(expansionKey -> {
+                    var patternBase = expansionKey.substring(0,expansionKey.indexOf(PACKAGE_EXPORT_WILDCARD));
+                    if(!matchKey.equals(patternBase) && matchKey.startsWith(patternBase)){
+                        var patternTrailer = expansionKey.substring(expansionKey.indexOf(PACKAGE_EXPORT_WILDCARD) + 1);
+                        if(patternTrailer.length()==0 || (matchKey.endsWith(patternTrailer) && matchKey.length() >= expansionKey.length())){
+                            var target = JSObject.get(matchObj, constant(expansionKey));
+                            var patternMatch = matchKey.substring(patternBase.length(), matchKey.length() - patternTrailer.length());
+                            return packageTargetResolve(packageURL, target, patternMatch, isImports, conditions, env);
+                        }
+                    }
+                    return null;
+                })
+                .filter(Objects::nonNull)
+                .findFirst();
+        if(resolved.isPresent()){
+            return resolved.get();
+        }
+        return null;
+    }
+
+    private boolean validateURL(String url){
+        try{
+            URI.create(url).toURL();
+            return true;
+        }catch(Throwable e){
+            return false;
+        }
+    }
+
+    /**
+     * PACKAGE_TARGET_RESOLVE(packageURL, target, patternMatch, isImports, conditions)
+     */
+
+    private URI packageTargetResolve(URI packageURL, Object target, String patternMatch, boolean isImports, List<String> conditions, TruffleLanguage.Env env) {
+        // 1 If target is a String, then
+        if(target instanceof TruffleString targetTStr){
+            String targetStr = targetTStr.toString();
+            if(!targetStr.startsWith("./")){
+                // 1.1 If target does not start with "./", then
+                // 1.1.1 If isImports is false, or if target starts with "../" or "/", or if target is a valid URL, then
+                    if(!isImports || targetStr.startsWith("../") || targetStr.startsWith("/") || validateURL(targetStr)) {
+                    throw fail(INVALID_PACKAGE_TARGET, targetStr);
+                }
+                // 1.1.2 If patternMatch is a String, then
+                if(patternMatch != null){
+                    // 1.1.2.1 Return PACKAGE_RESOLVE(target with every instance of "*" replaced by patternMatch, packageURL + "/").
+                    return packageResolve(targetStr.replaceAll(Pattern.quote(String.valueOf(PACKAGE_EXPORT_WILDCARD)), patternMatch),
+                        packageURL, env);
+                } else {
+                    // 1.1.3 Return PACKAGE_RESOLVE(target, packageURL + "/").
+                    return packageResolve(targetStr, packageURL, env);
+                }
+            } else {
+                // 1.2 If target split on "/" or "\" contains any "", ".", "..", or "node_modules" segments after the first "." segment, case insensitive and including percent encoded variants,
+                for(String seg:Arrays.asList(targetStr.substring(2).split("[/|\\\\]"))){
+                    if(seg.equals("") || seg.equals(DOT) || seg.equals(DOT+DOT) || seg.toLowerCase().equals(NODE_MODULES)){
+                       // throw an Invalid Package Target error.
+                       throw fail(INVALID_PACKAGE_TARGET, targetStr);
+                    }
+                }
+                // 1.3 Let resolvedTarget be the URL resolution of the concatenation of packageURL and target.
+                var resolvedTarget = packageURL.resolve(targetStr);
+                // 1.4 Assert: packageURL is contained in resolvedTarget.
+                if(!resolvedTarget.normalize().toString().startsWith(packageURL.normalize().toString())){
+                    throw fail(INVALID_PACKAGE_TARGET, targetStr);
+                }
+                // 1.5 If patternMatch is null, then
+                if(patternMatch == null ){
+                    return resolvedTarget;
+                }
+                // 1.6 If patternMatch split on "/" or "\" contains any "", ".", "..", or "node_modules" segments, case insensitive and including percent encoded variants.
+                for(String seg:Arrays.asList(patternMatch.split("[/|\\\\]"))){
+                    if(seg.equals("") || seg.equals(DOT) || seg.equals(DOT+DOT) || seg.toLowerCase().equals(NODE_MODULES)){
+                       // throw an Invalid Module Specifier error.
+                       throw fail(INVALID_MODULE_SPECIFIER, patternMatch);
+                    }
+                }
+                // 1.7 Return the URL resolution of resolvedTarget with every instance of "*" replaced with patternMatch.
+                return URI.create(resolvedTarget.toString().replaceAll(Pattern.quote(String.valueOf(PACKAGE_EXPORT_WILDCARD)), patternMatch));
+            }
+        } else if(target instanceof JSDynamicObject targetObj && JSObject.hasArray(targetObj)){
+            // 1.3 Otherwise, if target is an Array, then
+            ScriptArray _target = JSObject.getArray(targetObj);
+            // 1.3.1 If _target.length is zero, return null.
+            if(_target.length(targetObj)==0){
+                return null;
+            }
+            // 1.3.2 For each item targetValue in target, do
+            for(int i = 0; i < _target.length(targetObj); i++){
+                var targetValue = _target.getElement(targetObj, i);
+                // 1.3.2.1 Let resolved be the result of PACKAGE_TARGET_RESOLVE( packageURL, targetValue, patternMatch, isImports, conditions), continuing the loop on any Invalid Package Target error.
+                var resolved = packageTargetResolve(packageURL, targetValue, patternMatch, isImports, conditions, env);
+                // 1.3.2.2 If resolved is undefined, continue the loop.
+                // 1.3.2.3 Return resolved.
+                if(resolved!=null){
+                    return resolved;
+                }
+            }
+        }
+        else if(target instanceof JSDynamicObject targetObj) {
+            // 2 Otherwise, if target is a non-null Object, then
+
+            // 2.1 If target contains any index property keys, as defined in ECMA-262 6.1.7 Array Index, throw an Invalid Package Configuration error.
+            for(var key: targetObj.ownPropertyKeys()){
+                if(!(key instanceof TruffleString)){
+                    throw fail(INVALID_PACKAGE_CONFIGURATION, targetObj.toString());
+                }
+            }
+
+            for(var keyTStr: JSObject.enumerableOwnNames(targetObj)){
+                var p = keyTStr.toString();
+                if(p.equals("default") || conditions.contains(p)){
+                    var targetValue = JSObject.get(targetObj, keyTStr);
+                    var resolved = packageTargetResolve(packageURL, targetValue, patternMatch, isImports, conditions, env);
+                    if(resolved!=null){
+                        return resolved;
+                    }
+                }
+            }
+            return null;
+        }
+        if(target == null){
+            return null;
+        }
+        throw fail(INVALID_PACKAGE_TARGET, target.toString());
+	}
+
+	/**
      * PACKAGE_RESOLVE(packageSpecifier, parentURL).
      */
     private URI packageResolve(String packageSpecifier, URI parentURL, TruffleLanguage.Env env) {
@@ -460,46 +718,41 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
         // position at the length of packageName.
         String packageSpecifierSub = packageSpecifier.substring(packageName.length());
         String packageSubpath = DOT + packageSpecifierSub;
-        // 8. If packageSubpath ends in "/", then
+
         if (packageSubpath.endsWith(SLASH)) {
             // Throw an Invalid Module Specifier error.
             throw fail(INVALID_MODULE_SPECIFIER, packageSpecifier);
         }
-        // 9. Let selfUrl be the result of PACKAGE_SELF_RESOLVE(packageName, packageSubpath,
+
+        // 8. Let selfUrl be the result of PACKAGE_SELF_RESOLVE(packageName, packageSubpath,
         // parentURL).
-        URI selfUrl = packageSelfResolve(packageName, parentURL, env);
-        // 10. If selfUrl is not undefined, return selfUrl.
+        URI selfUrl = packageSelfResolve(packageName, packageSubpath, parentURL, env);
+        // 9. If selfUrl is not undefined, return selfUrl.
         if (selfUrl != null) {
             return selfUrl;
         }
         TruffleFile currentParentUrl = env.getPublicTruffleFile(parentURL);
-        // 11. While parentURL is not the file system root,
+        // 10. While parentURL is not the file system root,
         while (currentParentUrl != null && !isRoot(currentParentUrl)) {
-            // 11.1 Let packageURL be the URL resolution of "node_modules/" concatenated with
+            // 10.1 Let packageURL be the URL resolution of "node_modules/" concatenated with
             // packageSpecifier, relative to parentURL.
             URI packageUrl = getPackageUrl(packageName, currentParentUrl);
-            // 11.2 Set parentURL to the parent folder URL of parentURL.
+            // 10.2 Set parentURL to the parent folder URL of parentURL.
             currentParentUrl = currentParentUrl.getParent();
-            // 11.3 If the folder at packageURL does not exist, then
+            // 10.3 If the folder at packageURL does not exist, then
             TruffleFile maybeFolder = packageUrl != null ? env.getPublicTruffleFile(packageUrl) : null;
             if (maybeFolder == null || !maybeFolder.exists() || !maybeFolder.isDirectory()) {
                 continue;
             }
-            // 11.4 Let pjson be the result of READ_PACKAGE_JSON(packageURL).
+            // 10.4 Let pjson be the result of READ_PACKAGE_JSON(packageURL).
             PackageJson pjson = readPackageJson(packageUrl, env);
-            // 11.5 If pjson is not null and pjson.exports is not null or undefined, then
+            // 10.5 If pjson is not null and pjson.exports is not null or undefined, then
             if (pjson != null && pjson.hasExportsProperty()) {
-                var exp = pjson.getExport(packageSubpath);
-                if (exp == null) {
-                    throw fail(PACKAGE_PATH_NOT_EXPORTED, packageSpecifier);
-                }
-                if (!exp.startsWith("./")) {
-                    throw failMessage(INVALID_PACKAGE_EXPORT + exp + "'");
-                }
-                return packageUrl.resolve(exp.substring(2));
+                // 10.5.1 Return the result of PACKAGE_EXPORTS_RESOLVE(packageURL, packageSubpath, pjson.exports, defaultConditions).
+                return packageExportsResolve(packageUrl, packageSubpath, pjson.getExportsProperty(), getRegisteredExportTypes(), env);
             } else if (packageSubpath.equals(DOT)) {
-                // 11.6 Otherwise, if packageSubpath is equal to ".", then
-                // 11.6.1 If pjson.main is a string, then return the URL resolution of main in
+                // 10.6 Otherwise, if packageSubpath is equal to ".", then
+                // 10.6.1 If pjson.main is a string, then return the URL resolution of main in
                 // packageURL.
                 if (pjson != null && pjson.hasMainProperty()) {
                     TruffleString main = pjson.getMainProperty();
@@ -510,10 +763,10 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                     return TryCommonJS;
                 }
             }
-            // 7. Otherwise, Return the URL resolution of packageSubpath in packageURL.
+            // 10.7. Otherwise, Return the URL resolution of packageSubpath in packageURL.
             return packageUrl.resolve(packageSubpath);
         }
-        // 12. Will Throw a Module Not Found error.
+        // 11. Will Throw a Module Not Found error.
         return TryCustomESM;
     }
 
@@ -527,7 +780,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
     /**
      * PACKAGE_SELF_RESOLVE(packageName, packageSubpath, parentURL).
      */
-    private URI packageSelfResolve(String packageName, URI parentURL, TruffleLanguage.Env env) {
+    private URI packageSelfResolve(String packageName, String packageSubpath ,URI parentURL, TruffleLanguage.Env env) {
         // 1. Let packageURL be the result of LOOKUP_PACKAGE_SCOPE(parentURL).
         URI packageUrl = lookupPackageScope(parentURL, env);
         // 2. If packageURL is null, then Return undefined.
@@ -542,7 +795,8 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
         }
         // 5. If pjson.name is equal to packageName, then
         if (pjson.namePropertyEquals(packageName)) {
-            throw failMessage(UNSUPPORTED_PACKAGE_EXPORTS + packageName + "'");
+            // 5.1. Return the result of PACKAGE_EXPORTS_RESOLVE(packageURL, packageSubpath, pjson.exports, defaultConditions).
+            return packageExportsResolve(packageUrl, packageSubpath, pjson.getExportsProperty(), getRegisteredExportTypes(), env);
         }
         // 6. Otherwise, return undefined.
         return null;
@@ -586,7 +840,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
 
     private static class PackageJson {
 
-        private final JSDynamicObject jsonObj;
+		private final JSDynamicObject jsonObj;
 
         PackageJson(JSDynamicObject jsonObj) {
             assert jsonObj != null;
@@ -616,72 +870,18 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             return hasNonNullProperty(jsonObj, EXPORTS_PROPERTY_NAME);
         }
 
-        private static Pattern buildPatternFromWildcard(String srcPattern) {
-            if (!srcPattern.contains("*")) {
-                return Pattern.compile(Pattern.quote(srcPattern));
-            }
-            var parts = srcPattern.split(Pattern.quote("*"));
-            if (parts.length > 2 || parts.length==0) {
-                throw failMessage(INVALID_PACKAGE_EXPORT + srcPattern + "'");
-            }
-            var result = Pattern.quote(parts[0]) + "(.*)" +
-                         (parts.length == 2 ? parts[1] : "");
-            return Pattern.compile(result);
+        public Object getExportsProperty() {
+            assert hasExportsProperty();
+            return JSObject.get(jsonObj, EXPORTS_PROPERTY_NAME);
         }
 
-        private static String applySubpathPatternMatches(String destPattern, Matcher matcher) {
-            var result = destPattern;
-            if (matcher.groupCount() == 1) {
-               result = destPattern.replace("*", matcher.group(1));
-            }
-            return result;
+        public boolean hasImportsProperty() {
+            return hasNonNullProperty(jsonObj, IMPORTS_PROPERTY_NAME) && (JSObject.get(jsonObj, IMPORTS_PROPERTY_NAME) instanceof JSDynamicObject);
         }
 
-        public String getExport(String specifier) {
-            assert hasNonNullProperty(jsonObj, EXPORTS_PROPERTY_NAME);
-            var data = JSObject.get(jsonObj, EXPORTS_PROPERTY_NAME);
-            if (data instanceof TruffleString exportStr) {
-                if (specifier.equals(".")) {
-                    if (!exportStr.toString().startsWith(".") || exportStr.toString().contains("..")) {
-                        throw failMessage(INVALID_PACKAGE_EXPORT + exportStr + "'");
-                    }
-                    return exportStr.toString();
-                }
-                return null;
-            }
-            if (data instanceof JSDynamicObject exportsObj) {
-                for (TruffleString key : JSObject.enumerableOwnNames(exportsObj)) {
-                    // Build pattern and match from key
-                    Pattern keyPattern = PackageJson.buildPatternFromWildcard(key.toString());
-                    Matcher keyMatcher = keyPattern.matcher(specifier);
-                    // find a match for therequested export...
-                    if (keyMatcher.matches()) {
-                        // if we found it, it should be a nested object with export mappings. at this point, we've
-                        // already matched the path, so these are mappings of (type => path). `path` must be relative to
-                        // the package root, must start with `.`, must not contain relative backwards references, and
-                        // must be an extant regular file.
-                        Object value = JSObject.get(exportsObj, key);
-                        String subpathPatternDest = null;
-                        if (value instanceof JSDynamicObject valueObj) {
-                            subpathPatternDest = getExportByPreferredTypes(valueObj);
-                            if (subpathPatternDest == null) {
-                                return null;
-                            }
-                        } else if (value instanceof TruffleString exportStr) {
-                            // if the export is a string, it should be a path to the file to import.
-                            if (!exportStr.toString().startsWith(".") || exportStr.toString().contains("..")) {
-                                // must start with `.`, must not contain `..`
-                                throw failMessage(INVALID_PACKAGE_EXPORT + exportStr + "'");
-                            }
-                            subpathPatternDest = exportStr.toString();
-                        } else {
-                            throw failMessage(INVALID_PACKAGE_EXPORT + value + "'");
-                        }
-                        return applySubpathPatternMatches(subpathPatternDest, keyMatcher);
-                    }
-                }
-            }
-            return null;
+        public JSDynamicObject getImportsProperty() {
+            assert hasImportsProperty();
+            return (JSDynamicObject) JSObject.get(jsonObj, IMPORTS_PROPERTY_NAME);
         }
 
         public boolean hasMainProperty() {
