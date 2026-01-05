@@ -614,106 +614,119 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
      */
     private URI packageTargetResolve(URI packageURL, Object target, String patternMatch, boolean isImports, List<String> conditions, TruffleLanguage.Env env) {
         // 1. If target is a String, then
-        if(target instanceof TruffleString targetTStr){
+        if (target instanceof TruffleString targetTStr) {
             String targetStr = targetTStr.toString();
             // 1.1 If target does not start with "./", then
-            if(!targetStr.startsWith("./")){
+            if (!targetStr.startsWith("./")) {
                 boolean isValidUrl = (asURI(targetStr) != null);
-                // 1.1.1 If isImports is false, or if target starts with "../" or "/", or if target is a valid URL, then
-                    if(!isImports || targetStr.startsWith("../") || targetStr.startsWith("/") || isValidUrl) {
-                        throw fail(INVALID_PACKAGE_TARGET, targetStr);
-                    }
+                // 1.1.1 If isImports is false, or if target starts with "../" or "/", or if target
+                // is a valid URL, then
+                if (!isImports || targetStr.startsWith("../") || targetStr.startsWith("/") || isValidUrl) {
+                    throw fail(INVALID_PACKAGE_TARGET, targetStr);
+                }
                 // 1.1.2 If patternMatch is a String, then
-                if(patternMatch != null){
-                    // 1.1.2.1 Return PACKAGE_RESOLVE(target with every instance of "*" replaced by patternMatch, packageURL + "/").
+                if (patternMatch != null) {
+                    // 1.1.2.1 Return PACKAGE_RESOLVE(target with every instance of "*" replaced by
+                    // patternMatch, packageURL + "/").
                     return packageResolve(targetStr.replaceAll(Pattern.quote(String.valueOf(PACKAGE_EXPORT_WILDCARD)), patternMatch),
-                        packageURL, env);
+                                    packageURL, env);
                 } else {
                     // 1.1.3 Return PACKAGE_RESOLVE(target, packageURL + "/").
                     return packageResolve(targetStr, packageURL, env);
                 }
             } else {
-                // 1.2 If target split on "/" or "\" contains any "", ".", "..", or "node_modules" segments after the first "." segment, case insensitive and including percent encoded variants,
-                for(String seg : Arrays.asList(targetStr.substring(2).split("[/|\\\\]"))){
-                    if(seg.equals("") || seg.equals(DOT) || seg.equals(DOT+DOT) || seg.toLowerCase().equals(NODE_MODULES)){
-                       // throw an Invalid Package Target error.
-                       throw fail(INVALID_PACKAGE_TARGET, targetStr);
+                // 1.2 If target split on "/" or "\" contains any "", ".", "..", or "node_modules"
+                // segments after the first "." segment, case insensitive and including percent
+                // encoded variants,
+                for (String seg : Arrays.asList(targetStr.substring(2).split("[/|\\\\]"))) {
+                    if (seg.equals("") || seg.equals(DOT) || seg.equals(DOT + DOT) || seg.toLowerCase().equals(NODE_MODULES)) {
+                        // throw an Invalid Package Target error.
+                        throw fail(INVALID_PACKAGE_TARGET, targetStr);
                     }
                 }
-                // 1.3 Let resolvedTarget be the URL resolution of the concatenation of packageURL and target.
+                // 1.3 Let resolvedTarget be the URL resolution of the concatenation of packageURL
+                // and target.
                 var resolvedTarget = resolveRelativeToParent(targetStr, packageURL);
                 // 1.4 Assert: packageURL is contained in resolvedTarget.
-                if(!resolvedTarget.normalize().toString().startsWith(packageURL.normalize().toString())){
+                if (!resolvedTarget.normalize().toString().startsWith(packageURL.normalize().toString())) {
                     throw fail(INVALID_PACKAGE_TARGET, targetStr);
                 }
                 // 1.5 If patternMatch is null, then
-                if(patternMatch == null ){
+                if (patternMatch == null) {
                     // 1.5.1 Return resolvedTarget.
                     return resolvedTarget;
                 }
-                // 1.6 If patternMatch split on "/" or "\" contains any "", ".", "..", or "node_modules" segments, case insensitive and including percent encoded variants.
-                for(String seg : Arrays.asList(patternMatch.split("[/|\\\\]"))){
-                    if(seg.equals("") || seg.equals(DOT) || seg.equals(DOT+DOT) || seg.toLowerCase().equals(NODE_MODULES)){
-                       // throw an Invalid Module Specifier error.
-                       throw fail(INVALID_MODULE_SPECIFIER, patternMatch);
+                // 1.6 If patternMatch split on "/" or "\" contains any "", ".", "..", or
+                // "node_modules" segments, case insensitive and including percent encoded variants.
+                for (String seg : Arrays.asList(patternMatch.split("[/|\\\\]"))) {
+                    if (seg.equals("") || seg.equals(DOT) || seg.equals(DOT + DOT) || seg.toLowerCase().equals(NODE_MODULES)) {
+                        // throw an Invalid Module Specifier error.
+                        throw fail(INVALID_MODULE_SPECIFIER, patternMatch);
                     }
                 }
-                // 1.7 Return the URL resolution of resolvedTarget with every instance of "*" replaced with patternMatch.
+                // 1.7 Return the URL resolution of resolvedTarget with every instance of "*"
+                // replaced with patternMatch.
                 return asURI(resolvedTarget.toString().replaceAll(Pattern.quote(String.valueOf(PACKAGE_EXPORT_WILDCARD)), patternMatch));
             }
-        } else if(target instanceof JSDynamicObject targetObj && JSObject.hasArray(targetObj)) {
+        } else if (target instanceof JSDynamicObject targetObj && JSObject.hasArray(targetObj)) {
             // 1.3 Otherwise, if target is an Array, then
             ScriptArray _target = JSObject.getArray(targetObj);
             // 1.3.1 If _target.length is zero, return null.
-            if(_target.length(targetObj)==0){
+            if (_target.length(targetObj) == 0) {
                 return null;
             }
             // 1.3.2 For each item targetValue in target, do
-            for(int i = 0; i < _target.length(targetObj); i++){
+            for (int i = 0; i < _target.length(targetObj); i++) {
                 var targetValue = _target.getElement(targetObj, i);
-                // 1.3.2.1 Let resolved be the result of PACKAGE_TARGET_RESOLVE( packageURL, targetValue, patternMatch, isImports, conditions), continuing the loop on any Invalid Package Target error.
+                // 1.3.2.1 Let resolved be the result of PACKAGE_TARGET_RESOLVE( packageURL,
+                // targetValue, patternMatch, isImports, conditions), continuing the loop on any
+                // Invalid Package Target error.
                 var resolved = packageTargetResolve(packageURL, targetValue, patternMatch, isImports, conditions, env);
                 // 1.3.2.2 If resolved is undefined, continue the loop.
                 // 1.3.2.3 Return resolved.
-                if(resolved!=null){
+                if (resolved != null) {
                     return resolved;
                 }
             }
-        } else if(target instanceof JSDynamicObject targetObj) {
+        } else if (target instanceof JSDynamicObject targetObj) {
             // 2 Otherwise, if target is a non-null Object, then
 
-            // 2.1 If target contains any index property keys, as defined in ECMA-262 6.1.7 Array Index, throw an Invalid Package Configuration error.
-            for(var key: targetObj.ownPropertyKeys()){
-                if(!(key instanceof TruffleString)){
+            // 2.1 If target contains any index property keys, as defined in ECMA-262 6.1.7 Array
+            // Index, throw an Invalid Package Configuration error.
+            for (var key : targetObj.ownPropertyKeys()) {
+                if (!(key instanceof TruffleString)) {
                     throw fail(INVALID_PACKAGE_CONFIGURATION, targetObj.toString());
                 }
             }
 
-            // 2.2 For each property p of target, in object insertion order as
-            for(var keyTStr: JSObject.enumerableOwnNames(targetObj)){
-                var p = keyTStr.toString();
-                // 2.2.1 If p equals "default" or conditions contains an entry for p, then
-                if(p.equals("default") || conditions.contains(p)){
-                    // 2.2.1 Let targetValue be the value of the p property in target.
-                    var targetValue = JSObject.get(targetObj, keyTStr);
-                    // 2.2.2 Let resolved be the result of
-                    //   PACKAGE_TARGET_RESOLVE(packageURL, targetValue, patternMatch, isImports, conditions).
-                    var resolved = packageTargetResolve(packageURL, targetValue, patternMatch, isImports, conditions, env);
-                    // 2.2.3 If resolved is equal to undefined, continue the loop
-                    if(resolved!=null){
-                        // 2.2.4 Return resolved
-                        return resolved;
-                    }
+            // NOTE: this is one place we deviate from node.js's resolving algorithm.
+            // In node.js, it scans the properties of targetObj in insert order, and
+            // returns the result resolved from the first p when p.equals("default") or when p
+            // existes in conditions.
+            // In our case, we resolve result from the first condition in conditions and when
+            // condition is a property of targetObj.
+            var properties = conditions.stream().filter((p) -> JSObject.hasProperty(targetObj, constant(p))).collect(Collectors.toList());
+
+            for (var p : properties) {
+                var targetValue = JSObject.get(targetObj, constant(p));
+                // 2.2.2 Let resolved be the result of
+                // PACKAGE_TARGET_RESOLVE(packageURL, targetValue, patternMatch, isImports,
+                // conditions).
+                var resolved = packageTargetResolve(packageURL, targetValue, patternMatch, isImports, conditions, env);
+                // 2.2.3 If resolved is equal to undefined, continue the loop
+                if (resolved != null) {
+                    // 2.2.4 Return resolved
+                    return resolved;
                 }
             }
             // 3. Return undefined.
             return null;
         }
-        if(target == null){
+        if (target == null) {
             return null;
         }
         throw fail(INVALID_PACKAGE_TARGET, target.toString());
-	}
+    }
 
 	/**
      * PACKAGE_RESOLVE(packageSpecifier, parentURL).
