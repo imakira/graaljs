@@ -565,15 +565,6 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
         return null;
     }
 
-    private boolean validateURL(String url){
-        try{
-            URI.create(url).toURL();
-            return true;
-        }catch(Throwable e){
-            return false;
-        }
-    }
-
     /**
      * PACKAGE_TARGET_RESOLVE(packageURL, target, patternMatch, isImports, conditions)
      */
@@ -583,11 +574,12 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
         if(target instanceof TruffleString targetTStr){
             String targetStr = targetTStr.toString();
             if(!targetStr.startsWith("./")){
+                boolean isValidUrl = (asURI(targetStr) != null);
                 // 1.1 If target does not start with "./", then
                 // 1.1.1 If isImports is false, or if target starts with "../" or "/", or if target is a valid URL, then
-                    if(!isImports || targetStr.startsWith("../") || targetStr.startsWith("/") || validateURL(targetStr)) {
-                    throw fail(INVALID_PACKAGE_TARGET, targetStr);
-                }
+                    if(!isImports || targetStr.startsWith("../") || targetStr.startsWith("/") || isValidUrl) {
+                        throw fail(INVALID_PACKAGE_TARGET, targetStr);
+                    }
                 // 1.1.2 If patternMatch is a String, then
                 if(patternMatch != null){
                     // 1.1.2.1 Return PACKAGE_RESOLVE(target with every instance of "*" replaced by patternMatch, packageURL + "/").
