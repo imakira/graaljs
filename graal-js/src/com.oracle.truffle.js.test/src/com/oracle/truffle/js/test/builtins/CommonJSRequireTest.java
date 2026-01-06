@@ -849,7 +849,7 @@ public class CommonJSRequireTest {
     }
 
     @Test
-    public void importModuleFromExportsFieldPriority() throws IOException {
+    public void importModuleFromExportsField2() throws IOException {
         final String src = "import {name} from 'exports-in-package-json/feature.js'; console.log(name)";
         Map<String, String> options = getDefaultOptions();
         runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "graaljs\n", options);

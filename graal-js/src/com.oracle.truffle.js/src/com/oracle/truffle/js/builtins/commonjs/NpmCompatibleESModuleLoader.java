@@ -653,28 +653,26 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                 }
             }
 
-            // NOTE: this is one place we deviate from node.js's resolving algorithm.
-            // In node.js, it scans the properties of targetObj in insert order, and
-            // returns the result resolved from the first p when p.equals("default") or when p
-            // existes in conditions.
-            // In our case, we resolve result from the first condition in conditions and when
-            // condition is a property of targetObj.
-            var properties = conditions.stream().filter((p) -> JSObject.hasProperty(targetObj, constant(p))).toList();
-
-            for (var p : properties) {
-                var targetValue = JSObject.get(targetObj, constant(p));
-                // 2.2.2 Let resolved be the result of
-                // PACKAGE_TARGET_RESOLVE(packageURL, targetValue, patternMatch, isImports,
-                // conditions).
-                var resolved = packageTargetResolve(packageURL, targetValue, patternMatch, isImports, conditions, env);
-                // 2.2.3 If resolved is equal to undefined, continue the loop
-                if (resolved != null) {
-                    // 2.2.4 Return resolved
-                    return resolved;
-                }
-            }
-            // 3. Return undefined.
-            return null;
+			// 2.2 For each property p of target, in object insertion order as
+			for (var keyTStr : JSObject.enumerableOwnNames(targetObj)) {
+				var p = keyTStr.toString();
+				// 2.2.1 If p equals "default" or conditions contains an entry for p, then
+				if (p.equals("default") || conditions.contains(p)) {
+					// 2.2.1 Let targetValue be the value of the p property in target.
+					var targetValue = JSObject.get(targetObj, keyTStr);
+					// 2.2.2 Let resolved be the result of
+					// PACKAGE_TARGET_RESOLVE(packageURL, targetValue, patternMatch, isImports,
+					// conditions).
+					var resolved = packageTargetResolve(packageURL, targetValue, patternMatch, isImports, conditions, env);
+					// 2.2.3 If resolved is equal to undefined, continue the loop
+					if (resolved != null) {
+						// 2.2.4 Return resolved
+						return resolved;
+					}
+				}
+			}
+			// 3. Return undefined.
+			return null;
         }
         if (target == null) {
             return null;
