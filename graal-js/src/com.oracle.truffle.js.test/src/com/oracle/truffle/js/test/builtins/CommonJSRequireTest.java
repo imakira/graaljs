@@ -829,6 +829,20 @@ public class CommonJSRequireTest {
     }
 
     @Test
+    public void subpathImports() throws IOException {
+        final String src = "import {name} from 'subpath-imports'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "dep\n", options);
+    }
+
+    @Test
+    public void subpathImportsExternal() throws IOException {
+        final String src = "import {name} from 'subpath-imports/external'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "dep-external\n", options);
+    }
+
+    @Test
     public void importModuleFromExportsField() throws IOException {
         final String src = "import {name} from 'exports-in-package-json'; console.log(name)";
         Map<String, String> options = getDefaultOptions();
@@ -916,6 +930,15 @@ public class CommonJSRequireTest {
         Map<String, String> options = getDefaultOptions();
         runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "esm-graaljs\n", options);
     }
+
+    @Test
+    public void importModuleFromExportsArray() throws IOException {
+        final String src = "import {name} from 'exports-nested/exports-array'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "esm-node\n", options);
+    }
+
+
 
     @Test
     public void importModuleNestExportsShouldDefault() throws IOException{
