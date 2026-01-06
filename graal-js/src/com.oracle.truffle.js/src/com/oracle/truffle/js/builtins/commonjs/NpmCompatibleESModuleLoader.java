@@ -54,7 +54,6 @@ import static com.oracle.truffle.js.builtins.commonjs.CommonJSResolution.loadJso
 import static com.oracle.truffle.js.lang.JavaScriptLanguage.ID;
 import static com.oracle.truffle.js.runtime.Strings.EXPORTS_PROPERTY_NAME;
 import static com.oracle.truffle.js.runtime.Strings.IMPORTS_PROPERTY_NAME;
-import static com.oracle.truffle.js.runtime.Strings.IMPORT_SCRIPT_ENGINE_GLOBAL_BINDINGS;
 import static com.oracle.truffle.js.runtime.Strings.MODULE;
 import static com.oracle.truffle.js.runtime.Strings.NAME;
 import static com.oracle.truffle.js.runtime.Strings.PACKAGE_JSON_MAIN_PROPERTY_NAME;
@@ -64,13 +63,10 @@ import static com.oracle.truffle.js.runtime.Strings.constant;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import com.oracle.js.parser.ir.Module.ModuleRequest;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -361,7 +357,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             // 4.1 Let pjson be the result of READ_PACKAGE_JSON(packageURL).
             PackageJson pjson = readPackageJson(packageURL, env);
             // 4.2 If pjson.imports is a non-null Object, then
-            if(pjson.hasImportsProperty()){
+            if(pjson!=null && pjson.hasImportsProperty()){
                 JSDynamicObject imports = pjson.getImportsProperty();
                 if(imports!=null){
                     // 4.2.1 Let resolved be the result of
@@ -419,39 +415,6 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
         }
         // 8. Otherwise, Throw an Unsupported File Extension error.
         throw fail(UNSUPPORTED_FILE_EXTENSION, url.toString());
-    }
-
-    private static String getExportByPreferredTypes(JSDynamicObject exports) {
-        // in order of preference, find the best import to use for this circumstance; this will be `graaljs` if
-        // specified (as top preference), then `import`, then `require`, then `default`. if the developer has registered
-        // their own preferred export types, these will be preferred first.
-        //
-        // this branch only activates if package exports are present and need to be used to resolve an import. thus,
-        // there is no fallback behavior waiting for us, and so an exception is thrown if no export can be matched.
-
-        // 1.2: if so, resolve the import from the package root. make sure to slice off the `./` prefix.
-        for(String type : getRegisteredExportTypes()){
-            if(exports.hasOwnProperty(constant(type))){
-                var export = JSObject.get(exports, constant(type));
-                if(export!=null){
-                    if(Strings.isTString(export)){
-                        var exportStr = export.toString();
-                        if(!exportStr.startsWith("." ) || exportStr.contains("..")){
-                            // must start with `.`, must not contain `..`
-                          throw failMessage(INVALID_PACKAGE_TARGET + type + "'");
-                        }
-                        return exportStr;
-                    } else if (export instanceof JSDynamicObject exportObj) {
-                        var result = getExportByPreferredTypes(exportObj);
-                        // we will continue doing the DFS search if this subtree gives no result
-                        if(result != null){
-                            return result;
-                        }
-                    }
-                }
-            }
-        }
-        return null;
     }
 
     /**
@@ -577,7 +540,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                         .filter(key -> countChar(key, PACKAGE_EXPORT_WILDCARD) == 1)
                         // 3. sorted by the sorting function PATTERN_KEY_COMPARE which orders in
                         //    descending order of specificity
-                        .sorted((keyA, keyB) -> patternKeyCompare(keyA, keyB, packageURL)).collect(Collectors.toList());
+                        .sorted((keyA, keyB) -> patternKeyCompare(keyA, keyB, packageURL)).toList();
         for (var expansionKey : expansionKeys) {
             // 4. For each key expansionKey in expansionKeys, do
             // 4.1 Let patternBase be the substring of expansionKey up to but excluding the first
@@ -591,7 +554,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                 // 4.2.2 If patternTrailer has zero length, or if matchKey ends with patternTrailer
                 //   and the length of matchKey is greater than or equal to the length of
                 //   expansionKey, then
-                if (patternTrailer.length() == 0 || (matchKey.endsWith(patternTrailer) && matchKey.length() >= expansionKey.length())) {
+                if (patternTrailer.isEmpty() || (matchKey.endsWith(patternTrailer) && matchKey.length() >= expansionKey.length())) {
                     // 4.2.2.1 Let target be the value of matchObj[expansionKey].
                     var target = JSObject.get(matchObj, constant(expansionKey));
                     // 4.2.2.2 Let patternMatch be the substring of matchKey
@@ -638,8 +601,8 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                 // 1.2 If target split on "/" or "\" contains any "", ".", "..", or "node_modules"
                 // segments after the first "." segment, case insensitive and including percent
                 // encoded variants,
-                for (String seg : Arrays.asList(targetStr.substring(2).split("[/|\\\\]"))) {
-                    if (seg.equals("") || seg.equals(DOT) || seg.equals(DOT + DOT) || seg.toLowerCase().equals(NODE_MODULES)) {
+                for (String seg : targetStr.substring(2).split("[/|\\\\]")) {
+                    if (seg.isEmpty() || seg.equals(DOT) || seg.equals(DOT + DOT) || seg.equalsIgnoreCase(NODE_MODULES)) {
                         // throw an Invalid Package Target error.
                         throw fail(INVALID_PACKAGE_TARGET, targetStr);
                     }
@@ -648,7 +611,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                 // and target.
                 var resolvedTarget = resolveRelativeToParent(targetStr, packageURL);
                 // 1.4 Assert: packageURL is contained in resolvedTarget.
-                if (!resolvedTarget.normalize().toString().startsWith(packageURL.normalize().toString())) {
+                if (!resolvedTarget.normalize().getPath().startsWith(packageURL.normalize().getPath())) {
                     throw fail(INVALID_PACKAGE_TARGET, targetStr);
                 }
                 // 1.5 If patternMatch is null, then
@@ -658,8 +621,8 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                 }
                 // 1.6 If patternMatch split on "/" or "\" contains any "", ".", "..", or
                 // "node_modules" segments, case insensitive and including percent encoded variants.
-                for (String seg : Arrays.asList(patternMatch.split("[/|\\\\]"))) {
-                    if (seg.equals("") || seg.equals(DOT) || seg.equals(DOT + DOT) || seg.toLowerCase().equals(NODE_MODULES)) {
+                for (String seg : patternMatch.split("[/|\\\\]")) {
+                    if (seg.isEmpty() || seg.equals(DOT) || seg.equals(DOT + DOT) || seg.equalsIgnoreCase(NODE_MODULES)) {
                         // throw an Invalid Module Specifier error.
                         throw fail(INVALID_MODULE_SPECIFIER, patternMatch);
                     }
@@ -705,7 +668,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             // existes in conditions.
             // In our case, we resolve result from the first condition in conditions and when
             // condition is a property of targetObj.
-            var properties = conditions.stream().filter((p) -> JSObject.hasProperty(targetObj, constant(p))).collect(Collectors.toList());
+            var properties = conditions.stream().filter((p) -> JSObject.hasProperty(targetObj, constant(p))).toList();
 
             for (var p : properties) {
                 var targetValue = JSObject.get(targetObj, constant(p));
