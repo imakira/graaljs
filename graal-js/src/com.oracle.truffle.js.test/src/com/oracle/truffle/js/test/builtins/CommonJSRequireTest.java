@@ -888,6 +888,21 @@ public class CommonJSRequireTest {
         }
     }
 
+    @Test
+    public void importModulePatternWithoutExtension() throws IOException{
+        final String src = "import {name} from 'exports-subpath-extensions/lib/index'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "index\n", options);
+    }
+
+    @Test
+    public void importModulePatternWithExtension() throws IOException{
+        final String src = "import {name} from 'exports-subpath-extensions/lib/index.js'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "index\n", options);
+
+    }
+
     private Source subpathPatternTestBuildSrc(String name){
           try {
               String src = "import {name} from 'exports-subpath-pattern" + (name == "" ? "" : "/" + name) + "'; console.log(name)";
@@ -938,8 +953,6 @@ public class CommonJSRequireTest {
         runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "esm-node\n", options);
     }
 
-
-
     @Test
     public void importModuleNestExportsShouldDefault() throws IOException{
         final String src = "import {name} from 'exports-nested/should-default.js'; console.log(name)";
@@ -949,7 +962,7 @@ public class CommonJSRequireTest {
 
     @Test
     public void importModuleExportsDefaultToCjs() throws IOException {
-        final String src = "import * as m from 'exports-nested/should-default-cjs'; console.log(m.name)";
+        final String src = "import {name} from 'exports-nested/should-default-cjs'; console.log(name)";
         Map<String, String> options = getDefaultOptions();
         runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "cjs-default\n", options);
     }
