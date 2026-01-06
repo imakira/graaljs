@@ -67,6 +67,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import com.oracle.js.parser.ir.Module.ModuleRequest;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -108,27 +109,17 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
     private static final String PACKAGE_IMPORT_NOT_DEFINED = "Packages imports do not define the specifier: '";
     private static final String UNSUPPORTED_DIRECTORY_IMPORT = "Unsupported directory import: '";
     private static final String INVALID_PACKAGE_CONFIGURATION = "Invalid package configuration: '";
-    private static final String EXPORT_TYPE_GRAALJS = "graaljs";
-    private static final String EXPORT_TYPE_IMPORT = "import";
-    private static final String EXPORT_TYPE_REQUIRE = "require";
-    private static final String EXPORT_TYPE_DEFAULT = "default";
+    private static final String CONDITION_TYPE_GRAALJS = "graaljs";
+    private static final String CONDITION_TYPE_IMPORT = "import";
+    private static final String CONDITION_TYPE_REQUIRE = "require";
+    private static final String CONDITION_TYPE_DEFAULT = "default";
     private static final char PACKAGE_EXPORT_WILDCARD = '*';
-    private static final LinkedList<String> EXPORT_TYPES;
+    private static final List<String> DEFAULT_CONDITIONS = List.of(CONDITION_TYPE_GRAALJS, CONDITION_TYPE_IMPORT, CONDITION_TYPE_REQUIRE, CONDITION_TYPE_DEFAULT);
 
-    static {
-        EXPORT_TYPES = new LinkedList<>(
-                List.of(EXPORT_TYPE_GRAALJS, EXPORT_TYPE_IMPORT, EXPORT_TYPE_REQUIRE, EXPORT_TYPE_DEFAULT)
-        );
-    }
-
-    public static void registerPreferredExportType(String exportType) {
-        if (!EXPORT_TYPES.contains(exportType)) {
-            EXPORT_TYPES.addFirst(exportType);
-        }
-    }
-
-    public static List<String> getRegisteredExportTypes() {
-        return List.copyOf(EXPORT_TYPES);
+    public List<String> getConditions() {
+        return Stream.concat(this.realm.getContextOptions().getUserConditions().stream(),
+            DEFAULT_CONDITIONS.stream())
+                .toList();
     }
 
     public static NpmCompatibleESModuleLoader create(JSRealm realm) {
@@ -301,7 +292,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             } else if (!specifier.isEmpty() && specifier.charAt(0) == '#') {
                 // 4. Otherwise, if specifier starts with "#", then
                 // 4.1 Set resolved to the result of PACKAGE_IMPORTS_RESOLVE(specifier, parentURL, defaultConditions).
-                resolved = packageImportsResolve(specifier, parentURL, getRegisteredExportTypes(), env);
+                resolved = packageImportsResolve(specifier, parentURL, getConditions(), env);
             } else {
                 // 5.1 Note: specifier is now a bare specifier.
                 // 5.2 Set resolvedURL the result of PACKAGE_RESOLVE(specifier, parentURL).
@@ -768,7 +759,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             // 10.5 If pjson is not null and pjson.exports is not null or undefined, then
             if (pjson != null && pjson.hasExportsProperty()) {
                 // 10.5.1 Return the result of PACKAGE_EXPORTS_RESOLVE(packageURL, packageSubpath, pjson.exports, defaultConditions).
-                return packageExportsResolve(packageUrl, packageSubpath, pjson.getExportsProperty(), getRegisteredExportTypes(), env);
+                return packageExportsResolve(packageUrl, packageSubpath, pjson.getExportsProperty(), getConditions(), env);
             } else if (packageSubpath.equals(DOT)) {
                 // 10.6 Otherwise, if packageSubpath is equal to ".", then
                 // 10.6.1 If pjson.main is a string, then return the URL resolution of main in
@@ -815,7 +806,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
         // 5. If pjson.name is equal to packageName, then
         if (pjson.namePropertyEquals(packageName)) {
             // 5.1. Return the result of PACKAGE_EXPORTS_RESOLVE(packageURL, packageSubpath, pjson.exports, defaultConditions).
-            return packageExportsResolve(packageUrl, packageSubpath, pjson.getExportsProperty(), getRegisteredExportTypes(), env);
+            return packageExportsResolve(packageUrl, packageSubpath, pjson.getExportsProperty(), getConditions(), env);
         }
         // 6. Otherwise, return undefined.
         return null;

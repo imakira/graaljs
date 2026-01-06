@@ -695,10 +695,9 @@ public class CommonJSRequireTest {
     }
 
     @Test
-    public void dontImportCommonJs() throws IOException {
-        final String src = "import('with-package').then(x => {throw 'unexpected'}).catch(console.log);";
-        final String out = "TypeError: Unsupported file extension: '" + getTestRootFolderUrl() + "node_modules/with-package/alternative-index.js'\n";
-        runAndExpectOutput(src, out);
+    public void dynamicImportCommonJs() throws IOException {
+        final String src = "import('with-package').then(x => {console.log(x.foo)}).catch(console.log);";
+        runAndExpectOutput(src, "42\n");
     }
 
     @Test
@@ -854,6 +853,14 @@ public class CommonJSRequireTest {
         final String src = "import {name} from 'exports-in-package-json/feature.js'; console.log(name)";
         Map<String, String> options = getDefaultOptions();
         runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "graaljs\n", options);
+    }
+
+    @Test
+    public void importModuleCustomCondition() throws IOException {
+        final String src = "import {name} from 'exports-in-package-json/feature.js'; console.log(name)";
+        Map<String, String> options = getDefaultOptions();
+        options.put("js.commonjs-require-user-conditions", "browser,node");
+        runAndExpectOutput(Source.newBuilder(ID, src, "test.mjs").build(), "node\n", options);
     }
 
     @Test
