@@ -54,7 +54,6 @@ import static com.oracle.truffle.js.builtins.commonjs.CommonJSResolution.loadJso
 import static com.oracle.truffle.js.lang.JavaScriptLanguage.ID;
 import static com.oracle.truffle.js.runtime.Strings.EXPORTS_PROPERTY_NAME;
 import static com.oracle.truffle.js.runtime.Strings.IMPORTS_PROPERTY_NAME;
-import static com.oracle.truffle.js.runtime.Strings.MODULE;
 import static com.oracle.truffle.js.runtime.Strings.NAME;
 import static com.oracle.truffle.js.runtime.Strings.PACKAGE_JSON_MAIN_PROPERTY_NAME;
 import static com.oracle.truffle.js.runtime.Strings.TYPE;
@@ -63,7 +62,6 @@ import static com.oracle.truffle.js.runtime.Strings.constant;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -99,6 +97,8 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
     private static final URI TryCommonJS = URI.create("custom:///try-common-js-token");
     private static final URI TryCustomESM = URI.create("custom:///try-custom-esm-token");
 
+    private static final String TYPE_MODULE = "module";
+    private static final String TYPE_COMMONS_JS = "commonjs";
     private static final String MODULE_NOT_FOUND = "Module not found: '";
     private static final String UNSUPPORTED_JSON = "JSON packages not supported.";
     private static final String FAILED_BUILTIN = "Failed to load built-in ES module: '";
@@ -273,7 +273,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
     //
     // #### ESM resolution algorithm emulation.
     //
-    // Best-effort implementation based on Node.js' v16.15.0 resolution algorithm.
+    // Best-effort implementation based on Node.js' v25.2.1 resolution algorithm.
     //
 
     /**
@@ -384,27 +384,57 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
         if (url.getPath().endsWith(JSON_EXT)) {
             throw failMessage(UNSUPPORTED_JSON);
         }
-        // 5. Let packageURL be the result of LOOKUP_PACKAGE_SCOPE(url).
+        // - 5. If url ends in ".wasm", then
+        // - 6. If --experimental-addon-modules is enabled and url ends in ".node", then
+        // 7. Let packageURL be the result of LOOKUP_PACKAGE_SCOPE(url).
         URI packageUri = lookupPackageScope(url, env);
+        PackageJson pjson = null;
         if (packageUri != null) {
-            // 6. Let pjson be the result of READ_PACKAGE_JSON(packageURL).
-            PackageJson pjson = readPackageJson(packageUri, env);
-            // 7. If pjson?.type exists and is "module", then
-            if (pjson != null && pjson.hasTypeModule()) {
-                // 7.1 If url ends in ".js", then Return "module"
-                if (url.getPath().endsWith(JS_EXT)) {
-                    return Format.ESM;
-                }
-            } else if (url.getPath().endsWith(JS_EXT)) {
-                // Np Fallback to CJS as below (in the case that there is a package.json without a "type" field, or
-                // the "type" field is not "module").
-                return Format.CommonJS;
+            // 8. Let pjson be the result of READ_PACKAGE_JSON(packageURL).
+             pjson = readPackageJson(packageUri, env);
+        }
+        // 9. Let packageType be null
+        String packageType = null;
+        if (pjson != null ) {
+            // 10. If pjson?.type is "module" or "commonjs", then
+            if(pjson.hasTypeProperty()){
+                // 10.1 Set packageType to pjson.type.
+                packageType = pjson.getTypeProperty();
             }
-        } else if (url.getPath().endsWith(JS_EXT)) {
-            // Np Package.json with .js extension: try loading as CJS like Node.js does.
+        }
+        // 11. If url ends in ".js", then
+        if (url.getPath().endsWith(JS_EXT)) {
+            // 11.1 If packageType is not null, then
+            if(packageType!=null){
+                // 11.1.1 Return packageType.
+                if(packageType.equals(TYPE_MODULE)){
+                    return Format.ESM;
+                } else {
+                    return Format.CommonJS;
+                }
+            }
+            // 11.2 If the result of DETECT_MODULE_SYNTAX(source) is true, then
+            // not implemented
+            // 11.3 Return "commonjs"
+            return Format.CommonJS;
+        } else if(!url.getPath().substring(url.getPath().lastIndexOf("/")).contains(".")){
+            // 12. If url does not have any extension, then
+            // 12.1 - If packageType is "module" and the file at url contains the "application/wasm" content type header for a WebAssembly module, then
+            // 12.2. If packageType is not null, then
+            if(packageType!=null){
+                // 12.2.1 Return packageType.
+                if(packageType.equals(TYPE_MODULE)){
+                    return Format.ESM;
+                } else {
+                    return Format.CommonJS;
+                }
+            }
+            // 12.3 If the result of DETECT_MODULE_SYNTAX(source) is true, then
+            //  not implemented
+            // 12.4 Return "commonjs".
             return Format.CommonJS;
         }
-        // 8. Otherwise, Throw an Unsupported File Extension error.
+        // Otherwise, Throw an Unsupported File Extension error.
         throw fail(UNSUPPORTED_FILE_EXTENSION, url.toString());
     }
 
@@ -622,27 +652,7 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
                 // replaced with patternMatch.
                 return asURI(resolvedTarget.toString().replaceAll(Pattern.quote(String.valueOf(PACKAGE_EXPORT_WILDCARD)), patternMatch));
             }
-        } else if (target instanceof JSDynamicObject targetObj && JSObject.hasArray(targetObj)) {
-            // 1.3 Otherwise, if target is an Array, then
-            ScriptArray _target = JSObject.getArray(targetObj);
-            // 1.3.1 If _target.length is zero, return null.
-            if (_target.length(targetObj) == 0) {
-                return null;
-            }
-            // 1.3.2 For each item targetValue in target, do
-            for (int i = 0; i < _target.length(targetObj); i++) {
-                var targetValue = _target.getElement(targetObj, i);
-                // 1.3.2.1 Let resolved be the result of PACKAGE_TARGET_RESOLVE( packageURL,
-                // targetValue, patternMatch, isImports, conditions), continuing the loop on any
-                // Invalid Package Target error.
-                var resolved = packageTargetResolve(packageURL, targetValue, patternMatch, isImports, conditions, env);
-                // 1.3.2.2 If resolved is undefined, continue the loop.
-                // 1.3.2.3 Return resolved.
-                if (resolved != null) {
-                    return resolved;
-                }
-            }
-        } else if (target instanceof JSDynamicObject targetObj) {
+        } else if (target instanceof JSDynamicObject targetObj && !JSObject.hasArray(targetObj)) {
             // 2 Otherwise, if target is a non-null Object, then
 
             // 2.1 If target contains any index property keys, as defined in ECMA-262 6.1.7 Array
@@ -671,12 +681,34 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
 					}
 				}
 			}
-			// 3. Return undefined.
+			// 2.3 Return undefined.
 			return null;
+        } else if (target instanceof JSDynamicObject targetObj && JSObject.hasArray(targetObj)) {
+            // 3. Otherwise, if target is an Array, then
+            ScriptArray _target = JSObject.getArray(targetObj);
+            // 3.1 If _target.length is zero, return null.
+            if (_target.length(targetObj) == 0) {
+                return null;
+            }
+            // 3.2 For each item targetValue in target, do
+            for (int i = 0; i < _target.length(targetObj); i++) {
+                var targetValue = _target.getElement(targetObj, i);
+                // 3.2.1 Let resolved be the result of PACKAGE_TARGET_RESOLVE( packageURL,
+                // targetValue, patternMatch, isImports, conditions), continuing the loop on any
+                // Invalid Package Target error.
+                var resolved = packageTargetResolve(packageURL, targetValue, patternMatch, isImports, conditions, env);
+                // 3.2.2 If resolved is undefined, continue the loop.
+                // 3.2.3 Return resolved.
+                if (resolved != null) {
+                    return resolved;
+                }
+            }
         }
+        // 4. Otherwise, if target is null, return null.
         if (target == null) {
             return null;
         }
+        // 5. Otherwise throw an Invalid Package Target error.
         throw fail(INVALID_PACKAGE_TARGET, target.toString());
     }
 
@@ -856,14 +888,26 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             this.jsonObj = jsonObj;
         }
 
-        boolean hasTypeModule() {
-            if (hasNonNullProperty(jsonObj, TYPE)) {
+        boolean hasTypeProperty() {
+            if (hasNonNullProperty(jsonObj, TYPE)){
                 Object nameValue = JSObject.get(jsonObj, TYPE);
                 if (nameValue instanceof TruffleString nameStr) {
-                    return Strings.equals(MODULE, nameStr);
+                    String type = nameStr.toString();
+                    if(type.equals(TYPE_MODULE) || type.equals(TYPE_COMMONS_JS)){
+                        return true;
+                    }
                 }
             }
             return false;
+        }
+
+        String getTypeProperty() {
+            assert hasTypeProperty();
+            Object nameValue = JSObject.get(jsonObj, TYPE);
+            if (nameValue instanceof TruffleString nameStr) {
+                return nameStr.toString();
+            }
+            return null;
         }
 
         private static boolean hasNonNullProperty(JSDynamicObject object, TruffleString keyName) {
