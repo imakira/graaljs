@@ -417,24 +417,9 @@ public final class NpmCompatibleESModuleLoader extends DefaultESModuleLoader {
             // not implemented
             // 11.3 Return "commonjs"
             return Format.CommonJS;
-        } else if(!url.getPath().substring(url.getPath().lastIndexOf("/")).contains(".")){
-            // 12. If url does not have any extension, then
-            // 12.1 - If packageType is "module" and the file at url contains the "application/wasm" content type header for a WebAssembly module, then
-            // 12.2. If packageType is not null, then
-            if(packageType!=null){
-                // 12.2.1 Return packageType.
-                if(packageType.equals(TYPE_MODULE)){
-                    return Format.ESM;
-                } else {
-                    return Format.CommonJS;
-                }
-            }
-            // 12.3 If the result of DETECT_MODULE_SYNTAX(source) is true, then
-            //  not implemented
-            // 12.4 Return "commonjs".
-            return Format.CommonJS;
         }
-        // Otherwise, Throw an Unsupported File Extension error.
+        // 12. If url does not have any extension, then
+        //  not implemented
         throw fail(UNSUPPORTED_FILE_EXTENSION, url.toString());
     }
 

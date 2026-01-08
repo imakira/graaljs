@@ -674,13 +674,6 @@ public class CommonJSRequireTest {
     }
 
     @Test
-    public void testImportModuleNoExtension() throws IOException {
-        final String src = "import('esm-no-extension').then(x => console.log(x.name));";
-        final String out = "esm-no-extension\n";
-        runAndExpectOutput(src, out);
-    }
-
-    @Test
     public void unknownEsModule() throws IOException {
         final String src = "import('unknown').then(x => {throw 'unexpected'}).catch(console.log);";
         final String out = "TypeError: Module not found: 'unknown'\n";
